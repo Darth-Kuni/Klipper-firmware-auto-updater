@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.0
+
+- Make Git clone plus the executable `kcm.sh` launcher the recommended installation flow; no package installation or virtual environment is needed to open the guide.
+- Support Moonraker application updates directly in the cloned checkout, with automatic Git-mode detection and protected configuration backups.
+- Keep single-file release downloads and ZIP-based Moonraker updates available for existing installations.
+- Simplify the README and move alternate installation methods into a separate guide.
+
 ## v0.3.0
 
 - Publish the standalone application, wheel, source archive and checksums through GitHub releases.

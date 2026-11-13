@@ -20,6 +20,26 @@ def default_repository() -> str:
     return normalize_repository(json.loads(resources.files('kcm').joinpath('data/project.json').read_text(encoding='utf-8'))['repository'])
 
 
+def checkout_directory() -> Path | None:
+    """Recognize a source checkout without treating an installed wheel as Git."""
+    root = Path(__file__).resolve().parent.parent
+    if root.is_dir() and (root / '.git').exists() and (root / 'kcm.sh').is_file():
+        return root
+    return None
+
+
+def setup_git_updates(store: Store, checkout: Path, moonraker_config: Path,
+                      repository: str | None, confirm, output=print) -> dict:
+    if platform.system() != 'Linux':
+        raise UpdateError('Configure Moonraker application updates on its Linux host over SSH.')
+    with Manager(store, output=output)._lock():
+        result = Installer(store, output=output).install_git(
+            repository or default_repository(), checkout, moonraker_config, confirm)
+        output(f'Continue launching the app with: {Path(checkout).expanduser() / "kcm.sh"}')
+        output('Exit the application before Moonraker updates its checkout. Saved profiles remain in the data directory.')
+        return result
+
+
 def _resource_copy(source, destination: Path):
     destination.mkdir(parents=True, exist_ok=True)
     for item in source.iterdir():

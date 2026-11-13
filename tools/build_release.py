@@ -28,7 +28,7 @@ def main() -> None:
     version = re.search(r'__version__ = "([0-9.]+)"', version_text).group(1)
     name = f"klipper-component-manager-{version}"
     files = [root / item for item in ("README.md", "VALIDATION.md", "LICENSE", "pyproject.toml", ".gitignore")]
-    for optional in ('CONTRIBUTING.md', 'CHANGELOG.md', '.gitattributes'):
+    for optional in ('CONTRIBUTING.md', 'CHANGELOG.md', '.gitattributes', 'kcm.sh'):
         if (root / optional).is_file():
             files.append(root / optional)
     files.extend((root / '.github/workflows').glob('*.yml'))

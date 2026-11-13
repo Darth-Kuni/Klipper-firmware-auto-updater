@@ -41,6 +41,8 @@ jobs:
           assert match and match.group(1) == __version__, "The package and application versions must agree"
       - name: Run tests without printer access
         run: python -m unittest discover -s tests
+      - name: Check clone-and-run launcher
+        run: ./kcm.sh --version
       - name: Build the installable wheel
         run: python -m pip wheel --no-deps --wheel-dir dist .
       - name: Build standalone downloads and Moonraker bundle
@@ -98,8 +100,13 @@ jobs:
           tag = os.environ["GITHUB_REF_NAME"]
           notes = (
               f"Standalone Linux terminal application {tag}. Python 3.10 or newer is required.\n\n"
-              "Download the versioned `.pyz` to run the program directly with Python. "
-              "The wheel supports conventional Python installation; the source ZIP includes the source and tests.\n\n"
+              "Recommended installation over SSH, as your normal Linux user from your home directory:\n\n"
+              f"```sh\ngit clone https://github.com/{repository}.git\n"
+              "./Klipper-firmware-auto-updater/kcm.sh\n```\n\n"
+              "Run `~/Klipper-firmware-auto-updater/kcm.sh moonraker-setup` to configure application updates for the clone. "
+              "Application updates do not compile or flash printer boards.\n\n"
+              "Optional downloads include a single-file `.pyz`, Python wheel and source ZIP. "
+              "Existing release-ZIP installations can continue using `klipper-component-manager-moonraker.zip`.\n\n"
               "For an existing Moonraker-managed installation, use `klipper-component-manager-moonraker.zip` "
               "through the documented update-manager configuration. The app update does not flash printer boards.\n\n"
               f"Read the [setup and update instructions](https://github.com/{repository}/blob/{tag}/README.md) "

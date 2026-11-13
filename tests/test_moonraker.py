@@ -1,6 +1,7 @@
 """Updater integration tests never download releases or restart services."""
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -8,7 +9,7 @@ import zipfile
 
 from kcm.engine import UpdateError
 from kcm.moonraker import (APP_NAME, ASSET_NAME, MANAGED_MARKER, SNIPPET_NAME,
-                           Installer, render_update_config)
+                           Installer, render_git_update_config, render_update_config)
 from kcm.storage import Store
 
 
@@ -225,6 +226,130 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("channel: stable", snippet.read_text())
         self.assertEqual((Path(result["backup_dir"]) / SNIPPET_NAME).read_text(), changed)
         self.assertTrue(snippet.read_text().startswith(MANAGED_MARKER))
+
+
+class GitInstallerTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[2])
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.checkout = self.root / "checkout"
+        self.checkout.mkdir()
+        self.store = Store(self.root / "saved-data")
+        self.config = self.root / "printer-data/config/moonraker.conf"
+        self.config.parent.mkdir(parents=True)
+        self.original = b"[server]\nport: 7125\n"
+        self.config.write_bytes(self.original)
+        (self.checkout / "kcm").mkdir()
+        (self.checkout / "kcm/cli.py").write_text("def main(): pass\n", encoding="utf-8")
+        launcher = self.checkout / "kcm.sh"
+        launcher.write_text("#!/usr/bin/env bash\npython3 -m kcm\n", encoding="utf-8")
+        launcher.chmod(0o755)
+        self.git("init", "-b", "main")
+        self.git("config", "user.name", "KCM Test")
+        self.git("config", "user.email", "test@example.invalid")
+        self.git("add", "kcm.sh", "kcm/cli.py")
+        self.git("commit", "-m", "Fixture application")
+        self.git("remote", "add", "origin", f"https://github.com/{REPOSITORY}.git")
+        self.git("config", "branch.main.remote", "origin")
+        self.git("config", "branch.main.merge", "refs/heads/main")
+        self.installer = Installer(self.store, output=lambda _: None)
+
+    def git(self, *arguments):
+        return subprocess.run(["git", "-C", str(self.checkout), *arguments],
+                              capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+
+    def install(self, confirm=lambda _: True):
+        return self.installer.install_git(REPOSITORY, self.checkout, self.config, confirm)
+
+    def test_git_renderer_uses_main_without_release_metadata_or_service_hooks(self):
+        text = render_git_update_config(REPOSITORY, Path("/home/pi/KCM"))
+        for field in ("type: git_repo\n", "channel: dev\n", "primary_branch: main\n",
+                      f"origin: https://github.com/{REPOSITORY}.git\n", "is_system_service: False\n"):
+            self.assertIn(field, text)
+        for forbidden in ("asset_name:", "managed_services:", "install_script:", "action=", "release_info"):
+            self.assertNotIn(forbidden, text)
+
+    def test_real_checkout_preflight_is_read_only_and_needs_no_zip_metadata(self):
+        plan = self.installer.validate_git_target(REPOSITORY, self.checkout, self.config)
+        self.assertEqual(plan["mode"], "git_repo")
+        self.assertEqual(plan["checkout"], str(self.checkout))
+        self.assertFalse((self.checkout / "release_info.json").exists())
+        self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertFalse((self.config.parent / SNIPPET_NAME).exists())
+
+    def test_git_install_backs_up_preserves_checkout_and_is_idempotent(self):
+        commit = self.git("rev-parse", "HEAD")
+        result = self.install()
+        self.assertEqual((Path(result["backup_dir"]) / self.config.name).read_bytes(), self.original)
+        self.assertIn("type: git_repo", (self.config.parent / SNIPPET_NAME).read_text())
+        self.assertEqual(self.git("rev-parse", "HEAD"), commit)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        repeated = self.install(lambda _: self.fail("Identical configuration must not prompt"))
+        self.assertFalse(repeated["changed"])
+
+    def test_git_decline_makes_no_configuration_or_checkout_changes(self):
+        with self.assertRaisesRegex(UpdateError, "cancelled"):
+            self.install(lambda _: False)
+        self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertFalse((self.config.parent / SNIPPET_NAME).exists())
+        self.assertFalse((self.store.root / "backups").exists())
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_origin_identity_is_checked_and_ssh_origin_remains_usable(self):
+        for origin in (f"git@github.com:{REPOSITORY}.git", f"ssh://git@github.com/{REPOSITORY}.git"):
+            self.git("remote", "set-url", "origin", origin)
+            plan = self.installer.validate_git_target(REPOSITORY, self.checkout, self.config)
+            self.assertIn(f"origin: {origin}\n", plan["config"])
+        for origin in ("https://github.com/SomeoneElse/project.git", "https://token@github.com/TestUser/klipper-component-manager.git", REPOSITORY):
+            self.git("remote", "set-url", "origin", origin)
+            with self.subTest(origin=origin), self.assertRaises(UpdateError):
+                self.installer.validate_git_target(REPOSITORY, self.checkout, self.config)
+
+    def test_nonmain_dirty_or_missing_launcher_checkout_is_rejected(self):
+        self.git("checkout", "-b", "experiment")
+        with self.assertRaises(UpdateError):
+            self.installer.validate_git_target(REPOSITORY, self.checkout, self.config)
+        self.git("checkout", "main")
+        module = self.checkout / "kcm/cli.py"
+        original = module.read_bytes()
+        module.write_bytes(original + b"# local modification\n")
+        with self.assertRaisesRegex(UpdateError, "tracked local changes"):
+            self.installer.validate_git_target(REPOSITORY, self.checkout, self.config)
+        module.write_bytes(original)
+        (self.checkout / "kcm.sh").unlink()
+        with self.assertRaisesRegex(UpdateError, "launcher"):
+            self.installer.validate_git_target(REPOSITORY, self.checkout, self.config)
+
+    def test_git_mode_still_protects_saved_data_and_moonraker_config(self):
+        nested_store = Store(self.checkout / "private-profiles")
+        with self.assertRaisesRegex(UpdateError, "saved data"):
+            Installer(nested_store).validate_git_target(REPOSITORY, self.checkout, self.config)
+        nested_config = self.checkout / "printer-data/config/moonraker.conf"
+        nested_config.parent.mkdir(parents=True)
+        nested_config.write_bytes(self.original)
+        with self.assertRaisesRegex(UpdateError, "configuration directory"):
+            self.installer.validate_git_target(REPOSITORY, self.checkout, nested_config)
+
+    def test_git_worktree_file_is_accepted_as_an_exact_checkout_root(self):
+        worktree = self.root / "worktree"
+        self.git("worktree", "add", "--force", str(worktree), "main")
+        self.assertTrue((worktree / ".git").is_file())
+        plan = self.installer.validate_git_target(REPOSITORY, worktree, self.config)
+        self.assertEqual(plan["checkout"], str(worktree))
+
+    def test_switch_from_managed_zip_to_git_requires_approval_and_keeps_backup(self):
+        snippet = self.config.parent / SNIPPET_NAME
+        old = render_update_config(REPOSITORY, self.root / "old-app")
+        snippet.write_bytes(old.encode())
+        self.config.write_bytes(self.original + f"\n[update_manager]\n[include {SNIPPET_NAME}]\n".encode())
+        with self.assertRaisesRegex(UpdateError, "cancelled"):
+            self.install(lambda _: False)
+        self.assertEqual(snippet.read_text(), old)
+        result = self.install()
+        self.assertEqual((Path(result["backup_dir"]) / SNIPPET_NAME).read_text(), old)
+        self.assertIn("type: git_repo", snippet.read_text())
 
 
 if __name__ == "__main__":

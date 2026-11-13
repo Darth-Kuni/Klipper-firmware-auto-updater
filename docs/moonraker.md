@@ -1,31 +1,37 @@
 # Moonraker application updates
 
-This integration updates the standalone Klipper Component Manager application from normal GitHub releases. It does not run firmware jobs, install Katapult, or flash printer boards.
+Moonraker can update the KCM application shown in Mainsail/Fluidd's update manager. Firmware compilation and board flashing remain explicit actions inside KCM.
 
-## Recommended setup
+## Recommended: update the Git clone
 
-Run on the Linux host as the user who normally operates Moonraker/KCM:
+After the normal clone-and-launch installation, run:
 
 ```sh
-python3 ~/klipper-component-manager.pyz moonraker-setup --app-dir "$HOME/klipper-component-manager-app" --config "$HOME/printer_data/config/moonraker.conf"
+~/Klipper-firmware-auto-updater/kcm.sh moonraker-setup
 ```
 
-Use the actual configuration file for the intended Moonraker instance. If you changed KCM's data directory, put the same global `--data-dir PATH` before `moonraker-setup` and use it on every future launch.
+The command detects the checkout and its repository. Select the actual `moonraker.conf` for your printer when prompted, then review and confirm the plan. You do not need to choose another application directory or re-enter the repository for the normal clone.
 
-The confirmation shows the application directory, saved-data directory, selected Moonraker configuration and generated updater section. Installation stages a complete standalone program, writes `release_info.json`, backs up configuration and creates a managed `kcm-updater.conf` include. It preserves unrelated configuration and detects conflicting sections or concurrent edits. It does not restart any service.
+If you already know the configuration path, supply it explicitly:
 
-Afterwards:
+```sh
+~/Klipper-firmware-auto-updater/kcm.sh moonraker-setup --config "$HOME/printer_data/config/moonraker.conf"
+```
 
-1. Exit KCM and wait until all firmware operations and printing have finished.
-2. Restart the correct Moonraker instance. For the usual service, `sudo systemctl restart moonraker`; custom instances may have a different name.
-3. Refresh the update manager in Mainsail/Fluidd.
-4. Use the managed program: `python3 ~/klipper-component-manager-app/klipper-component-manager.pyz`.
+Use your real path for multiple/custom printer instances. The command backs up affected configuration under `DATA_ROOT/backups/moonraker`, writes a managed `kcm-updater.conf`, and adds its include and the base update-manager section if needed. It preserves unrelated configuration and checks for conflicts or concurrent edits. Application source stays in the current clone; saved profiles and jobs stay in the separate KCM data directory.
 
-Keep profiles and artifacts outside the managed app directory. Moonraker replaces application files there during updates. The default KCM data directory is `~/.local/share/klipper-component-manager`; it is not part of the release ZIP.
+After setup:
 
-## Expected configuration
+1. Exit KCM and finish any firmware operations and printing.
+2. Restart the intended Moonraker service. A usual instance uses `sudo systemctl restart moonraker`; custom instances use their own service name. Hosts provisioned by KCM use `kcm-moonraker-PRINTER_ID`.
+3. Refresh updates in Mainsail/Fluidd and use the **klipper-component-manager** entry.
+4. Continue launching `~/Klipper-firmware-auto-updater/kcm.sh`.
 
-Add the base section only if it is not already present:
+Setup does not restart services itself. Close KCM before Moonraker changes its application files.
+
+## Generated Git configuration
+
+The main Moonraker configuration has the shared base section and an include when they are needed:
 
 ```ini
 [update_manager]
@@ -33,7 +39,67 @@ Add the base section only if it is not already present:
 [include kcm-updater.conf]
 ```
 
-The managed `kcm-updater.conf` contains:
+The managed include for the default clone resembles:
+
+```ini
+[update_manager klipper-component-manager]
+type: git_repo
+channel: dev
+path: /home/YOUR_USER/Klipper-firmware-auto-updater
+origin: https://github.com/Darth-Kuni/Klipper-firmware-auto-updater.git
+primary_branch: main
+is_system_service: False
+```
+
+The actual include uses the full path of the detected clone. `channel: dev` follows source commits on `main`, rather than GitHub release tags. It does not select the release-based `stable` channel. KCM remains alpha software while hardware validation is outstanding.
+
+Keep the application checkout clean so Moonraker can update it. Review local changes before updating; do not use a hard-reset recovery action to discard work you want to keep. A wildcard include such as `[include *.conf]` may already load the generated file; the setup command accounts for that. Do not add a second updater section with the same name.
+
+See Moonraker's [Git repo configuration](https://moonraker.readthedocs.io/en/latest/configuration/#git-repo-configuration) for its updater settings.
+
+## Manual application update
+
+Exit KCM and finish firmware work, then run:
+
+```sh
+git -C ~/Klipper-firmware-auto-updater pull --ff-only
+```
+
+Launch the app with the same `kcm.sh` path afterwards. If Git reports local changes or divergent commits, inspect them before retrying. This command preserves work through Git's normal checks and does not hard-reset the checkout.
+
+The default saved-data directory is `~/.local/share/klipper-component-manager`, or `$XDG_DATA_HOME/klipper-component-manager`. It is outside the clone. With a custom `--data-dir`, keep it outside the checkout and use the same global argument for setup and normal launches:
+
+```sh
+~/Klipper-firmware-auto-updater/kcm.sh --data-dir /path/to/kcm-data moonraker-setup
+```
+
+## Migrate an existing ZIP updater to the clone
+
+Exit the old application, clone the repository using the [recommended installation](installation.md#recommended-clone-and-launch), and run the clone's `moonraker-setup` against the same Moonraker configuration.
+
+The setup recognizes its own managed include, backs up affected files and proposes the Git updater for the current clone. It does not move or recreate printer profiles. Use the same Linux user and data-directory setting to retain them. A conflicting manually written updater section needs review before setup can continue.
+
+Restart the correct idle Moonraker instance and launch the clone afterwards. The old standalone application directory is no longer the update target; retain it until you have checked the new setup and backups.
+
+## Optional: release ZIP updates
+
+This alternative remains available for users who prefer a single-file release installation. It follows normal GitHub releases, rather than the `main` source branch.
+
+From the downloaded `.pyz`, specify a dedicated application directory and the real Moonraker config:
+
+```sh
+python3 ~/klipper-component-manager.pyz moonraker-setup --app-dir "$HOME/klipper-component-manager-app" --config "$HOME/printer_data/config/moonraker.conf"
+```
+
+`--app-dir` explicitly chooses ZIP mode. It is separate from the automatic Git-clone mode; do not supply it together with `--checkout`. The directory must be outside Git checkouts, saved printer data and Moonraker's configuration folder.
+
+After confirming the plan, setup installs the standalone app and its release metadata there, backs up configuration and writes the updater include. Exit KCM, restart the correct idle Moonraker instance and refresh updates. Launch the managed copy afterwards:
+
+```sh
+python3 ~/klipper-component-manager-app/klipper-component-manager.pyz
+```
+
+The release-mode include resembles:
 
 ```ini
 [update_manager klipper-component-manager]
@@ -44,52 +110,18 @@ path: /home/YOUR_USER/klipper-component-manager-app
 is_system_service: False
 ```
 
-Replace the example path with the real dedicated application directory. Do not duplicate an existing updater section. An existing wildcard include such as `[include *.conf]` can already load the file, so an additional exact include may be unnecessary; the setup command checks this.
+The application directory contains `klipper-component-manager.pyz` and `release_info.json` at its root. The metadata identifies the repository, exact release tag and fixed asset `klipper-component-manager-moonraker.zip`. `asset_name` belongs in that JSON, not in the Moonraker configuration. The `stable` channel means ordinary GitHub releases; it does not establish physical printer testing.
 
-The application directory contains exactly:
+For manual ZIP installation, download the [Moonraker release bundle](https://github.com/Darth-Kuni/Klipper-firmware-auto-updater/releases/latest/download/klipper-component-manager-moonraker.zip) and its matching checksum manifest from the same release. Verify the checksum, extract the two root files into an empty dedicated app directory, then add the ZIP updater using your real path. Keep profiles outside that directory.
 
-```text
-klipper-component-manager.pyz
-release_info.json
-```
+See Moonraker's [ZIP application configuration](https://moonraker.readthedocs.io/en/latest/configuration/#zip-application-configuration) and [release metadata format](https://moonraker.readthedocs.io/en/latest/configuration/#the-release_infojson-file).
 
-For the first published release, metadata is:
+## Troubleshooting, backups and removal
 
-```json
-{
-  "project_name": "Klipper-firmware-auto-updater",
-  "project_owner": "Darth-Kuni",
-  "version": "v0.3.0",
-  "asset_name": "klipper-component-manager-moonraker.zip"
-}
-```
+If the updater is missing, check the actual configuration path/includes, restart the intended Moonraker service and refresh updates. For Git mode, confirm the configured path is the same clone you launch, its branch is `main`, its origin is correct and its tracked files are clean. For ZIP mode, check the two root files, exact release tag and fixed bundle asset.
 
-The version is the exact GitHub release tag. `asset_name` belongs in this JSON, not in the Moonraker configuration. No application service or restart hook is configured. The stable channel follows normal releases; it does not mean hardware validation is complete or that alpha software is production certified.
+If the program appears unchanged after updating, verify that you launched the configured application copy. A separately downloaded `.pyz` or old app directory will not reflect updates to a Git clone.
 
-## Manual installation
+Setup prints its backup directory under `DATA_ROOT/backups/moonraker`. To roll configuration back manually, inspect those backups and any subsequent edits, then restore only the affected files. Configuration backups do not roll back board firmware. No application-updater operation flashes a board.
 
-Use this if you prefer to configure Moonraker yourself:
-
-1. Create an empty, dedicated application directory outside any Git checkout, saved-data directory and printer configuration folder.
-2. Download [the Moonraker release bundle](https://github.com/Darth-Kuni/Klipper-firmware-auto-updater/releases/latest/download/klipper-component-manager-moonraker.zip) and the matching `SHA256SUMS.txt` from the same release. Verify the checksum before extraction.
-3. Extract the bundle into that empty directory. The two files above must be at its root, with no extra nested release folder.
-4. Back up your Moonraker configuration, then add the updater section using your actual path and enable the base update manager if needed.
-5. Exit KCM, restart the correct idle Moonraker instance, refresh updates, and launch the managed copy.
-
-Do not point Moonraker's ZIP updater at the source checkout or the directory containing your printer profiles. To keep a source checkout, use a separate directory for the release-managed application.
-
-## Backups, troubleshooting and removal
-
-The automated configuration command keeps backups under `DATA_ROOT/backups/moonraker/`. Its output names the exact backup directory. Those backups cover the affected main/include files; always keep your own copy of the full printer configuration too.
-
-If the updater does not appear, check the actual configuration path and includes, restart the correct service, then refresh its update manager. If it reports invalid state, verify the two root files, repository owner/name, exact version tag, correct fixed ZIP asset and a normal published GitHub release. Empty GitHub repositories and unreleased tags cannot supply an application update.
-
-If the managed program seems unchanged after an update, confirm that you are launching the copy in the configured application directory rather than the original download. Close the terminal program before updating its files.
-
-For manual configuration rollback, inspect the recorded backup and restore only the affected configuration files after checking for subsequent edits. The command does not automatically restart services. Application configuration backups do not roll back board firmware.
-
-To disable updates, back up the configuration, remove the updater section/include, and ensure no wildcard include still loads `kcm-updater.conf`. Keep a shared `[update_manager]` section if other components use it. Restart the correct Moonraker instance when idle. Saved KCM profiles and firmware remain unchanged.
-
-## Reference
-
-The integration follows Moonraker's [ZIP application configuration](https://moonraker.readthedocs.io/en/latest/configuration/#zip-application-configuration) and [release_info.json format](https://moonraker.readthedocs.io/en/latest/configuration/#the-release_infojson-file).
+To disable KCM application updates, back up Moonraker's configuration and remove the updater section/include, ensuring no wildcard include still loads `kcm-updater.conf`. Keep the shared `[update_manager]` section when other components use it. Restart the correct idle instance. Saved KCM profiles and build jobs remain in their separate data directory.

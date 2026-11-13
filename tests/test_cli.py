@@ -92,6 +92,27 @@ class CliTests(unittest.TestCase):
             cli._configure(manager, self.printer, self.component)
         self.assertEqual(manager.configure.call_args.kwargs, {"import_path": None, "refresh": False})
 
+    def test_clone_moonraker_setup_uses_git_without_extra_path_questions(self):
+        checkout = Path(self.temp.name) / 'clone'
+        config = Path(self.temp.name) / 'moonraker.conf'
+        with patch('kcm.app_updates.checkout_directory', return_value=checkout), \
+             patch('kcm.app_updates.setup_git_updates') as git_setup, \
+             patch('kcm.app_updates.setup_updates') as zip_setup, \
+             patch('builtins.input', side_effect=AssertionError('No extra questions when paths are supplied')):
+            cli._moonraker_setup(self.store, config=config, repository='Darth-Kuni/Klipper-firmware-auto-updater')
+        self.assertEqual(git_setup.call_args.args[:3], (self.store, checkout, config))
+        zip_setup.assert_not_called()
+
+    def test_explicit_zip_directory_preserves_previous_update_method(self):
+        app_dir, config = Path(self.temp.name) / 'app', Path(self.temp.name) / 'moonraker.conf'
+        with patch('kcm.app_updates.checkout_directory') as detect, \
+             patch('kcm.app_updates.setup_git_updates') as git_setup, \
+             patch('kcm.app_updates.setup_updates') as zip_setup:
+            cli._moonraker_setup(self.store, app_dir=app_dir, config=config, repository='Darth-Kuni/Klipper-firmware-auto-updater')
+        self.assertEqual(zip_setup.call_args.args[:3], (self.store, app_dir, config))
+        detect.assert_not_called()
+        git_setup.assert_not_called()
+
     def test_empty_confirmation_never_authorizes_flash(self):
         with patch("builtins.input", return_value=""):
             self.assertFalse(cli._yes("Flash firmware?"))

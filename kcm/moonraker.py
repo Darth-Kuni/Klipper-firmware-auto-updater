@@ -1,9 +1,11 @@
-"""Configure updates for the standalone application, without running firmware jobs.
+"""Configure updates for the KCM application, without running firmware jobs.
 
 Moonraker's zip updater requires release_info.json beside the installed app:
 https://moonraker.readthedocs.io/en/latest/configuration/#zip-application-configuration
 https://moonraker.readthedocs.io/en/latest/configuration/#the-release_infojson-file
 The asset_name setting belongs in that JSON, rather than moonraker.conf.
+Source checkouts use the separate git_repo schema:
+https://moonraker.readthedocs.io/en/latest/configuration/#git-repo-configuration
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import subprocess
 import tempfile
 import time
 from urllib.parse import urlsplit
@@ -71,6 +74,53 @@ def render_update_config(repo: str, install_dir: Path) -> str:
             "channel: stable\n"
             f"repo: {repository}\n"
             f"path: {path}\n"
+            "is_system_service: False\n"
+            "info_tags:\n"
+            "    desc=Klipper Component Manager application\n")
+
+
+def _origin_repository(origin: str) -> str:
+    """Normalize only credential-free GitHub Git origins, without exposing them."""
+    if not isinstance(origin, str) or any(ord(c) < 33 for c in origin):
+        raise UpdateError("The checkout origin must be a credential-free GitHub HTTPS or SSH URL.")
+    if origin.startswith("git@github.com:"):
+        value = origin[len("git@github.com:"):].rstrip("/")
+        if value.endswith(".git"):
+            value = value[:-4]
+        return normalize_repository(value)
+    if origin.startswith("ssh://"):
+        try:
+            parsed = urlsplit(origin)
+            valid = (parsed.hostname == "github.com" and parsed.username == "git" and parsed.password is None
+                     and parsed.port in (None, 22) and not parsed.query and not parsed.fragment)
+        except ValueError:
+            valid = False
+        if not valid:
+            raise UpdateError("The checkout origin must be a credential-free GitHub HTTPS or SSH URL.")
+        return normalize_repository("https://github.com/" + parsed.path.lstrip("/"))
+    if origin.startswith("https://"):
+        return normalize_repository(origin)
+    raise UpdateError("The checkout origin must be a credential-free GitHub HTTPS or SSH URL.")
+
+
+def render_git_update_config(repo: str, checkout: Path, *, origin: str | None = None) -> str:
+    """Render Moonraker's Git updater; the existing ZIP renderer is unchanged."""
+    repository = normalize_repository(repo)
+    path = _config_path_value(checkout)
+    remote = origin or f"https://github.com/{repository}.git"
+    if _origin_repository(remote).lower() != repository.lower():
+        raise UpdateError("The Git origin does not match the requested application repository.")
+    remote = remote.rstrip("/")
+    if not remote.endswith(".git"):
+        remote += ".git"
+    return (f"{MANAGED_MARKER}\n"
+            "# Board profiles and jobs stay in KCM's separate data directory.\n"
+            f"[{SECTION_NAME}]\n"
+            "type: git_repo\n"
+            "channel: dev\n"
+            f"path: {path}\n"
+            f"origin: {remote}\n"
+            "primary_branch: main\n"
             "is_system_service: False\n"
             "info_tags:\n"
             "    desc=Klipper Component Manager application\n")
@@ -240,18 +290,87 @@ class Installer:
         return {key: value for key, value in self._plan(repository, app_dir, moonraker_config,
                     require_installed=require_installed).items() if key != "_edits"}
 
+    @staticmethod
+    def _git(checkout: Path, *arguments: str) -> str:
+        environment = os.environ.copy()
+        environment.update(GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0")
+        try:
+            result = subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", str(checkout), *arguments],
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                    timeout=10, env=environment, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise UpdateError("Cannot inspect the local Git checkout; install Git and verify the selected path.") from exc
+        if result.returncode:
+            # stderr may include a credentialed origin; do not echo it.
+            raise UpdateError("Cannot validate the local Git checkout. Verify its origin, main branch, and tracking configuration.")
+        return result.stdout.strip()
+
+    def _git_plan(self, repository: str, checkout: Path, moonraker_config: Path) -> dict:
+        repository = normalize_repository(repository)
+        selected, config_selected = Path(checkout).expanduser(), Path(moonraker_config).expanduser()
+        _config_path_value(selected)
+        if selected.is_symlink() or not selected.is_dir() or not (selected / ".git").exists():
+            raise UpdateError("Select the root of an existing KCM Git checkout, including its .git directory or worktree file.")
+        if not config_selected.is_absolute() or config_selected.is_symlink() or not config_selected.is_file():
+            raise UpdateError("Select the existing, regular moonraker.conf file for the intended printer instance.")
+        app, main = selected.resolve(), config_selected.resolve()
+        if app == Path(app.anchor) or app == Path.home().resolve() or _overlaps(app, self.store.root):
+            raise UpdateError("The Git checkout must be separate from KCM's profiles, jobs, and other saved data.")
+        if _overlaps(app, main.parent):
+            raise UpdateError("The Git checkout must be separate from Moonraker's configuration directory.")
+        launcher, module = app / "kcm.sh", app / "kcm/cli.py"
+        if (not launcher.is_file() or launcher.is_symlink() or not module.is_file() or module.is_symlink()
+                or (os.name == "posix" and not os.access(launcher, os.X_OK))):
+            raise UpdateError("The KCM checkout must contain kcm/cli.py and an executable kcm.sh launcher.")
+        if Path(self._git(app, "rev-parse", "--show-toplevel")).resolve() != app:
+            raise UpdateError("The selected application path is not the exact Git checkout root.")
+        branch = self._git(app, "symbolic-ref", "--quiet", "--short", "HEAD")
+        if branch != "main":
+            raise UpdateError("Moonraker application updates require this checkout's local main branch.")
+        origin = self._git(app, "remote", "get-url", "origin")
+        if _origin_repository(origin).lower() != repository.lower():
+            raise UpdateError("The checkout origin belongs to another GitHub repository.")
+        if (self._git(app, "config", "--get", "branch.main.remote") != "origin" or
+                self._git(app, "config", "--get", "branch.main.merge") != "refs/heads/main"):
+            raise UpdateError("The checkout's main branch must track origin/main before enabling Moonraker updates.")
+        if self._git(app, "status", "--porcelain", "--untracked-files=no"):
+            raise UpdateError("The application checkout has tracked local changes. Commit/reconcile them before enabling updates.")
+        snippet = main.parent / SNIPPET_NAME
+        configuration = render_git_update_config(repository, app, origin=origin)
+        edits = self._configuration(main, snippet, configuration.encode("utf-8"))
+        return {"repository": repository, "app_dir": str(app), "checkout": str(app), "mode": "git_repo",
+                "moonraker_config": str(main), "snippet": str(snippet), "config": configuration,
+                "changed": edits["changed"], "additions": edits["additions"], "_edits": edits,
+                "restart_required": edits["changed"]}
+
+    def validate_git_target(self, repository: str, checkout: Path, moonraker_config: Path) -> dict:
+        """Read-only Git preflight; never fetch, reset, copy, or run firmware."""
+        return {key: value for key, value in self._git_plan(repository, checkout, moonraker_config).items()
+                if key != "_edits"}
+
+    def install_git(self, repository: str, checkout: Path, moonraker_config: Path, confirm) -> dict:
+        return self._install_plan(self._git_plan(repository, checkout, moonraker_config), confirm)
+
     def install(self, repository: str, app_dir: Path, moonraker_config: Path, confirm) -> dict:
         plan = self._plan(repository, app_dir, moonraker_config, require_installed=True)
+        return self._install_plan(plan, confirm)
+
+    def _install_plan(self, plan: dict, confirm) -> dict:
         if not plan["changed"]:
             self.output("Moonraker application updates are already configured.")
             return {key: value for key, value in plan.items() if key != "_edits"}
         main, snippet = Path(plan["moonraker_config"]), Path(plan["snippet"])
-        prompt = (f"Configure Moonraker stable application updates from {plan['repository']}\n"
+        channel = "main-branch" if plan.get("mode") == "git_repo" else "stable"
+        prompt = (f"Configure Moonraker {channel} application updates from {plan['repository']}\n"
                   f"Application directory: {plan['app_dir']}\nManaged include: {snippet}\n"
                   f"Append to {main}: {', '.join(plan['additions']) or 'no additions'}\n\n"
                   + plan["config"] + "\nBack up affected configuration files and apply this configuration? No services will be restarted.")
         if not confirm(prompt):
             raise UpdateError("Moonraker setup cancelled before changing configuration.")
+        if plan.get("mode") == "git_repo":
+            refreshed = self._git_plan(plan["repository"], Path(plan["checkout"]), main)
+            if refreshed["config"] != plan["config"]:
+                raise UpdateError("The checkout identity changed while awaiting confirmation; review it and try again.")
         edits = plan["_edits"]
         for path, original in edits["originals"].items():
             if _read(path) != original:

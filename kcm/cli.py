@@ -153,12 +153,17 @@ def _show_plan(manager: Manager, printer: Printer) -> None:
 
 
 def _moonraker_setup(store: Store, *, app_dir: Path | None = None,
-                     config: Path | None = None, repository: str | None = None):
-    from .app_updates import default_repository, setup_updates
-    app_dir = app_dir or Path(_path('Dedicated application update directory', '~/klipper-component-manager-app'))
+                     config: Path | None = None, repository: str | None = None,
+                     checkout: Path | None = None):
+    from .app_updates import checkout_directory, default_repository, setup_git_updates, setup_updates
+    checkout = checkout or (checkout_directory() if app_dir is None else None)
     config = config or Path(_path('Existing Moonraker configuration', '~/printer_data/config/moonraker.conf'))
-    repository = repository or _ask('GitHub release repository', default_repository())
-    setup_updates(store, app_dir, config, repository, confirm=_yes, output=print)
+    repository = repository or default_repository()
+    if checkout is not None:
+        setup_git_updates(store, checkout, config, repository, confirm=_yes, output=print)
+    else:
+        app_dir = app_dir or Path(_path('Dedicated application update directory', '~/klipper-component-manager-app'))
+        setup_updates(store, app_dir, config, repository, confirm=_yes, output=print)
 
 
 def _flash_menu(manager: Manager, printer: Printer) -> None:
@@ -285,8 +290,10 @@ def _parser() -> argparse.ArgumentParser:
     setup.add_argument("printer", nargs="?")
     boards = commands.add_parser("boards", help="find bundled board references and official documentation")
     boards.add_argument("query", nargs="*", help="board name, manufacturer, revision, or MCU")
-    updater = commands.add_parser('moonraker-setup', help='install the standalone app and configure Moonraker release updates')
-    updater.add_argument('--app-dir', type=Path, help='dedicated application directory outside Git and saved profiles')
+    updater = commands.add_parser('moonraker-setup', help='configure Moonraker updates for this clone or a standalone release')
+    update_location = updater.add_mutually_exclusive_group()
+    update_location.add_argument('--app-dir', type=Path, help='use release ZIP updates in a dedicated application directory')
+    update_location.add_argument('--checkout', type=Path, help='use Git updates for this checkout; auto-detected when launched from a clone')
     updater.add_argument('--config', type=Path, help='existing moonraker.conf for the intended printer')
     updater.add_argument('--repository', help='GitHub owner/repository; defaults to this release repository')
     for name in ("plan", "doctor"):
@@ -319,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
             from .onboarding import show_boards
             show_boards(" ".join(args.query))
         elif args.command == 'moonraker-setup':
-            _moonraker_setup(store, app_dir=args.app_dir, config=args.config, repository=args.repository)
+            _moonraker_setup(store, app_dir=args.app_dir, config=args.config, repository=args.repository, checkout=args.checkout)
         elif args.command == "list":
             printers = store.load()
             if not printers:

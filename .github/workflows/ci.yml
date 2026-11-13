@@ -47,6 +47,9 @@ jobs:
           assert match and match.group(1) == __version__, "Update both application and package versions"
       - name: Run tests without printer access
         run: python -m unittest discover -s tests
+      - name: Check clone-and-run launcher
+        if: runner.os == 'Linux'
+        run: ./kcm.sh --version
       - name: Build the installable wheel
         run: python -m pip wheel --no-deps --wheel-dir dist .
       - name: Build standalone downloads and Moonraker bundle
