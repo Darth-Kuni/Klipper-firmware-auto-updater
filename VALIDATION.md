@@ -15,11 +15,13 @@ This is a standalone alpha for review and controlled testing on a printer.
 
 ## Release checks
 
+The Linux/Windows workflow is available in [GitHub Actions](https://github.com/Darth-Kuni/Klipper-firmware-auto-updater/actions/workflows/ci.yml).
+
 The release contains a single-file Python zip application, a source ZIP and a Python wheel. Archive integrity, bundled catalog availability and isolated command-line launch are checked when packaging. No external installer integration is included.
 
 ## Not yet verified
 
-The test host is Windows; no native Linux runtime or physical printer was available. Actual Debian/Ubuntu dependency installation, Python environment provisioning on those hosts, systemd startup, Klipper/Katapult toolchain compilation, bootloader transitions, CAN-interface behavior and physical firmware writes still require controlled hardware testing.
+GitHub CI passed on Ubuntu with Python 3.10 and 3.12, and Windows with Python 3.12. The local preparation host was Windows. Hardware, service and package-manager operations in the tests remain simulated. Actual Debian/Ubuntu dependency installation, Python environment provisioning on printer hosts, systemd startup, Klipper/Katapult toolchain compilation, bootloader transitions, CAN-interface behavior and physical firmware writes still require controlled hardware testing.
 
 The first release does not automatically provision every printer. SD-card/SWD/ROM-UART bootloader methods, unknown board installation procedures, persistent Linux network configuration, complete machine pin/geometry configuration, optional browser frontend installation and physical commissioning include manual steps documented by the guide.
 

@@ -1,5 +1,7 @@
 # Klipper Component Manager
 
+[![CI](https://github.com/Darth-Kuni/Klipper-firmware-auto-updater/actions/workflows/ci.yml/badge.svg)](https://github.com/Darth-Kuni/Klipper-firmware-auto-updater/actions/workflows/ci.yml)
+
 Standalone Linux terminal software for guided Klipper/Katapult setup and repeatable firmware updates. Version 0.3.0 is an alpha for controlled testing. It is independent of other installers.
 
 ## Download and install
