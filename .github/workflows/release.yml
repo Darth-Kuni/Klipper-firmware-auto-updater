@@ -15,6 +15,8 @@ jobs:
   release:
     if: github.event.repository.fork == false
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     timeout-minutes: 20
     permissions:
       contents: write
@@ -88,9 +90,11 @@ jobs:
               recorded.add(name)
           assert {path.name for path in assets} <= recorded, "A published download is missing its checksum"
           with tempfile.TemporaryDirectory(prefix="kcm-release-smoke-", dir=os.environ["RUNNER_TEMP"]) as temporary:
+              environment = os.environ.copy()
+              environment.pop("PYTHONPATH", None)
               command = [sys.executable, str(program), "--data-dir", str(Path(temporary) / "state")]
-              subprocess.run(command + ["--version"], check=True)
-              subprocess.run(command + ["boards", "EBB36"], check=True)
+              subprocess.run(command + ["--version"], check=True, cwd=temporary, env=environment)
+              subprocess.run(command + ["boards", "EBB36"], check=True, cwd=temporary, env=environment)
           tag = os.environ["GITHUB_REF_NAME"]
           notes = (
               f"Standalone Linux terminal application {tag}. Python 3.10 or newer is required.\n\n"

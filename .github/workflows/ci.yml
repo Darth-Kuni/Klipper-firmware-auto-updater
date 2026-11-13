@@ -17,6 +17,8 @@ jobs:
   verify:
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -93,9 +95,11 @@ jobs:
               recorded.add(name)
           assert {path.name for path in assets} <= recorded, "A published download is missing its checksum"
           with tempfile.TemporaryDirectory(prefix="kcm-package-smoke-", dir=os.environ["RUNNER_TEMP"]) as temporary:
+              environment = os.environ.copy()
+              environment.pop("PYTHONPATH", None)
               command = [sys.executable, str(program), "--data-dir", str(Path(temporary) / "state")]
-              subprocess.run(command + ["--version"], check=True)
-              subprocess.run(command + ["boards", "EBB36"], check=True)
+              subprocess.run(command + ["--version"], check=True, cwd=temporary, env=environment)
+              subprocess.run(command + ["boards", "EBB36"], check=True, cwd=temporary, env=environment)
       - name: Retain checked downloads
         uses: actions/upload-artifact@v7
         with:
