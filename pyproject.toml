@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "klipper-component-manager"
+version = "0.3.0"
+
+description = "Standalone guided Klipper/Katapult setup and firmware updates for Linux."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+]
+
+[project.urls]
+Homepage = "https://github.com/Darth-Kuni/Klipper-firmware-auto-updater"
+Repository = "https://github.com/Darth-Kuni/Klipper-firmware-auto-updater"
+Issues = "https://github.com/Darth-Kuni/Klipper-firmware-auto-updater/issues"
+
+[project.scripts]
+kcm = "kcm.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kcm*"]
+
+[tool.setuptools.package-data]
+kcm = ["data/*.json", "data/*.md", "data/*.txt"]

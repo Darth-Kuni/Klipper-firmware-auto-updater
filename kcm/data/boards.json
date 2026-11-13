@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "boards": [
+    {
+      "id": "btt-ebb36-can-v1-2-g0b1",
+      "name": "BIGTREETECH EBB36 CAN",
+      "manufacturer": "BIGTREETECH",
+      "revision": "V1.2",
+      "mcu": "STM32G0B1CBT6",
+      "family": "stm32",
+      "documentation_url": "https://github.com/bigtreetech/EBB/blob/master/README.md#ebb36--42-can-v12",
+      "source_urls": [
+        "https://github.com/bigtreetech/EBB/blob/master/README.md",
+        "https://github.com/bigtreetech/EBB/blob/master/EBB%20CAN%20V1.1%20and%20V1.2%20(STM32G0B1)/sample-bigtreetech-ebb-canbus-v1.2.cfg"
+      ],
+      "notes": [
+        "Confirm EBB36, V1.2 and the MCU marking on the physical board. EBB36 V1.0 uses a different MCU and CAN pins.",
+        "V1.2 moves the hotend heater output from the V1.1 pin PA2 to PB13. Use the V1.2 printer configuration.",
+        "These are hardware references, not an automatic build preset. The Klipper application offset must match the Katapult build installed on this board."
+      ],
+      "transports": ["can", "usb"],
+      "initial_methods": ["dfu"],
+      "settings": {
+        "clock": "8 MHz crystal",
+        "can_pins": "PB0/PB1",
+        "usb_pins": "PA11/PA12"
+      }
+    },
+    {
+      "id": "btt-ebb42-can-v1-2-g0b1",
+      "name": "BIGTREETECH EBB42 CAN",
+      "manufacturer": "BIGTREETECH",
+      "revision": "V1.2",
+      "mcu": "STM32G0B1CBT6",
+      "family": "stm32",
+      "documentation_url": "https://github.com/bigtreetech/EBB/blob/master/README.md#ebb36--42-can-v12",
+      "source_urls": [
+        "https://github.com/bigtreetech/EBB/blob/master/README.md",
+        "https://github.com/bigtreetech/EBB/blob/master/EBB%20CAN%20V1.1%20and%20V1.2%20(STM32G0B1)/sample-bigtreetech-ebb-canbus-v1.2.cfg"
+      ],
+      "notes": [
+        "Confirm EBB42, V1.2 and the MCU marking on the physical board. EBB42 V1.0 uses a different MCU and CAN pins.",
+        "V1.2 moves the hotend heater output from the V1.1 pin PA2 to PB13. Use the V1.2 printer configuration.",
+        "These are hardware references, not an automatic build preset. The Klipper application offset must match the Katapult build installed on this board."
+      ],
+      "transports": ["can", "usb"],
+      "initial_methods": ["dfu"],
+      "settings": {
+        "clock": "8 MHz crystal",
+        "can_pins": "PB0/PB1",
+        "usb_pins": "PA11/PA12"
+      }
+    },
+    {
+      "id": "btt-octopus-v1-1-f446",
+      "name": "BIGTREETECH Octopus",
+      "manufacturer": "BIGTREETECH",
+      "revision": "V1.1 (STM32F446 variant)",
+      "mcu": "STM32F446ZET6",
+      "family": "stm32",
+      "documentation_url": "https://github.com/bigtreetech/BIGTREETECH-OCTOPUS-V1.0/blob/master/Firmware/Klipper/README.md",
+      "source_urls": [
+        "https://github.com/bigtreetech/BIGTREETECH-OCTOPUS-V1.0/blob/master/Firmware/Klipper/README.md",
+        "https://github.com/bigtreetech/docs/blob/master/docs/Octopus.md",
+        "https://github.com/bigtreetech/SKR-2/blob/master/Firmware/Marlin-bugfix-2.0.9.2.x/Marlin/src/core/boards.h"
+      ],
+      "notes": [
+        "Confirm the non-Pro Octopus V1.1 label and STM32F446 chip marking. Do not select this entry for an F429, F407 or H723 board.",
+        "The manufacturer documents a 32 KiB factory SD-card bootloader for this MCU. That factory offset is not a Katapult offset recommendation.",
+        "SD-card firmware updates require a working SD-card bootloader. Installing Katapult changes the bootloader arrangement; follow the initial setup guide for the selected method."
+      ],
+      "transports": ["usb", "uart"],
+      "initial_methods": ["sdcard", "dfu"],
+      "settings": {
+        "clock": "12 MHz crystal",
+        "usb_pins": "PA11/PA12",
+        "uart_pins": "USART2 PD6/PD5"
+      }
+    },
+    {
+      "id": "btt-octopus-pro-v1-0-f429",
+      "name": "BIGTREETECH Octopus Pro",
+      "manufacturer": "BIGTREETECH",
+      "revision": "V1.0 (STM32F429 variant)",
+      "mcu": "STM32F429ZGT6",
+      "family": "stm32",
+      "documentation_url": "https://github.com/bigtreetech/BIGTREETECH-OCTOPUS-Pro",
+      "source_urls": [
+        "https://github.com/bigtreetech/BIGTREETECH-OCTOPUS-Pro/blob/master/README.md",
+        "https://github.com/bigtreetech/BIGTREETECH-OCTOPUS-V1.0/blob/master/Firmware/Klipper/README.md",
+        "https://github.com/bigtreetech/SKR-2/blob/master/Firmware/Marlin-bugfix-2.0.9.2.x/Marlin/src/core/boards.h"
+      ],
+      "notes": [
+        "Confirm Octopus Pro V1.0 and the STM32F429 chip marking. The F446 and H723 variants need different processor and clock selections.",
+        "The manufacturer documents an 8 MHz crystal for F429, versus 12 MHz for F446. Board names alone do not identify these variants.",
+        "The documented 32 KiB factory SD-card bootloader offset does not establish the offset of a replacement Katapult build. SD-card updates require the factory bootloader to be present."
+      ],
+      "transports": ["usb", "uart"],
+      "initial_methods": ["sdcard", "dfu"],
+      "settings": {
+        "clock": "8 MHz crystal",
+        "usb_pins": "PA11/PA12",
+        "uart_pins": "USART2 PD6/PD5"
+      }
+    },
+    {
+      "id": "btt-manta-m8p-v2-0-h723",
+      "name": "BIGTREETECH Manta M8P",
+      "manufacturer": "BIGTREETECH",
+      "revision": "V2.0",
+      "mcu": "STM32H723ZET6",
+      "family": "stm32",
+      "documentation_url": "https://github.com/bigtreetech/docs/blob/master/docs/M8P-V2_0.md",
+      "source_urls": [
+        "https://github.com/bigtreetech/docs/blob/master/docs/M8P-V2_0.md",
+        "https://github.com/bigtreetech/Manta-M8P/blob/master/V2.0/Firmware/generic-bigtreetech-manta-m8p-V2_0.cfg"
+      ],
+      "notes": [
+        "Confirm M8P V2.0 and STM32H723 on the board. M8P V1.x boards use a different MCU; these settings do not apply to them.",
+        "The manufacturer configuration describes a 128 KiB factory bootloader. Set Klipper's offset to the actual Katapult application offset when replacing that bootloader.",
+        "The plug-in CB1 or CM4 is the Linux host; this entry describes the separate H723 printer-controller MCU. SD-card updates require the board's SD-card bootloader."
+      ],
+      "transports": ["can", "usb", "uart"],
+      "initial_methods": ["sdcard", "dfu"],
+      "settings": {
+        "clock": "25 MHz crystal",
+        "can_pins": "PD0/PD1",
+        "usb_pins": "PA11/PA12",
+        "uart_pins": "USART1 PA10/PA9"
+      }
+    },
+    {
+      "id": "btt-ebb-sb2209-can-v1-0-rp2040",
+      "name": "BIGTREETECH EBB SB2209 CAN RP2040",
+      "manufacturer": "BIGTREETECH",
+      "revision": "V1.0 (RP2040 variant)",
+      "mcu": "RP2040",
+      "family": "rp2040",
+      "documentation_url": "https://github.com/bigtreetech/docs/blob/master/docs/EBB%202209%20CAN%20RP2040.md",
+      "source_urls": [
+        "https://github.com/bigtreetech/docs/blob/master/docs/EBB%202209%20CAN%20RP2040.md",
+        "https://github.com/bigtreetech/EBB/blob/master/EBB%20SB2209%20CAN%20(RP2040)/sample-bigtreetech-ebb-sb-rp2040-canbus-v1.0.cfg",
+        "https://github.com/Arksine/katapult/blob/master/README.md",
+        "https://www.raspberrypi.com/documentation/microcontrollers/microcontroller-chips.html"
+      ],
+      "notes": [
+        "Confirm the RP2040 version on the board. The STM32 SB2209 and SB2240 versions are different products.",
+        "Initial USB system-boot mode is RP2040 BOOTSEL with UF2 support. Although the board guide calls it DFU, it is not STM32 DFU.",
+        "The manufacturer's Katapult example uses a 16 KiB application offset. Verify the actual selected Katapult offset before building Klipper; no offset is applied automatically."
+      ],
+      "transports": ["can", "usb"],
+      "initial_methods": ["uf2"],
+      "settings": {
+        "can_pins": "gpio4/gpio5"
+      }
+    }
+  ]
+}
