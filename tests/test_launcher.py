@@ -76,11 +76,13 @@ class LauncherTests(unittest.TestCase):
                                  'moonraker-setup', '--config', str(configuration)], input='y\n',
                                 cwd=self.root, env=environment, text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        snippet = configuration.with_name('kcm-updater.conf').read_text(encoding='utf-8')
-        self.assertIn('type: git_repo', snippet)
-        self.assertIn('path: ' + str(clone), snippet)
-        self.assertNotIn('type: zip', snippet)
-        self.assertIn('[include kcm-updater.conf]', configuration.read_text())
+        updated = configuration.read_text(encoding='utf-8')
+        self.assertIn('[update_manager klipper-component-manager]', updated)
+        self.assertIn('type: git_repo', updated)
+        self.assertIn('path: ' + str(clone), updated)
+        self.assertNotIn('type: zip', updated)
+        self.assertNotIn('[include kcm-updater.conf]', updated)
+        self.assertFalse(configuration.with_name('kcm-updater.conf').exists())
         self.assertEqual(git('-C', str(clone), 'status', '--porcelain', '--untracked-files=no').stdout.strip(), '')
 
 

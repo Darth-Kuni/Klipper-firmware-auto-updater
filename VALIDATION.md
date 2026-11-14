@@ -1,17 +1,17 @@
-# Version 0.4.0 validation
+# Version 0.4.1 validation
 
 This is a standalone alpha for review and controlled testing on a printer.
 
 ## Completed checks
 
-- The 185-test suite passes on the local Windows preparation host with subprocess resource warnings treated as errors. Four Linux-only launcher checks are skipped there and run on Ubuntu in GitHub Actions.
+- The 198-test suite passes on the local Windows preparation host with subprocess resource warnings treated as errors. Four Linux-only launcher checks are skipped there and run on Ubuntu in GitHub Actions.
 - Dependency installation, systemd operations, firmware writes, USB/CAN/UART traffic and UF2 device writes were simulated. Tests never connected to a printer or changed the test machine's services/packages.
 - Source integration tests use real local Git repositories with network transport disabled, checking current/latest source snapshots, commit pinning and local fast-forward application.
 - Regression checks cover unknown/incomplete board evidence, cancellation records, complete MCU inventory, configuration drift, build artifacts, distinct UART baud rates, exact DFU identity, UF2 family/volume identity, deployer rejection, bootloader/application MCU and offset consistency, partial-update records and leaving services stopped after failures.
 - Fresh-host service tests check that existing services/configurations are preserved, generated socket/config paths agree, and physical startup is a separate confirmed action.
 - The bundled catalog contains six manufacturer-sourced board references with exact revisions. It does not generate automatic firmware presets.
 
-- Moonraker integration tests cover managed includes, configuration backups, concurrent edits, application/data separation, adoption, cancellation and preserving an existing installation. Git-mode tests additionally check the checkout identity, clean tracked files, branch/tracking settings, SSH origins, worktrees and migration from an existing managed ZIP updater.
+- Moonraker integration tests cover direct updater sections in the main configuration, migration from older managed includes while retaining their other settings, configuration backups, partial-write recovery, concurrent edits, application/data separation, adoption, cancellation and preserving an existing installation. Git-mode tests additionally check the checkout identity, clean tracked files, branch/tracking settings, SSH origins, worktrees and migration from an existing managed ZIP updater.
 - Linux launcher checks cover the executable entry point from an unrelated working directory, selecting the correct application checkout, paths containing spaces, argument forwarding, unsupported Python versions, and a fresh local clone configuring its own Moonraker Git updater.
 
 ## Release checks

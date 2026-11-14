@@ -32,7 +32,7 @@ The clone follows `main`. To update it manually, finish firmware work and close 
 git -C ~/Klipper-firmware-auto-updater pull --ff-only
 ```
 
-Review local changes or divergent commits if Git refuses the update. The update command does not hard-reset your checkout. For updates through Mainsail/Fluidd, run `~/Klipper-firmware-auto-updater/kcm.sh moonraker-setup` and follow the [Moonraker guide](moonraker.md).
+Review local changes or divergent commits if Git refuses the update. The update command does not hard-reset your checkout. For updates through Mainsail/Fluidd, choose the helper or manual section in the [Moonraker guide](moonraker.md). The helper command `~/Klipper-firmware-auto-updater/kcm.sh moonraker-setup` backs up configuration and writes the updater directly into your selected `moonraker.conf`.
 
 ## Start with your printer
 
@@ -104,4 +104,6 @@ The `kcm` command in this example is provided by the wheel installation and its 
 
 Exit the downloaded app, clone the repository using the recommended commands, and launch `kcm.sh` under the same Linux user with the same data-directory setting. Your saved profiles stay in the data directory and do not need copying into the clone.
 
-If Moonraker was configured for the old ZIP application directory, run the cloned launcher's `moonraker-setup` command against the same real `moonraker.conf`. It backs up affected configuration before switching a recognized managed include to the Git checkout. Review any conflicting manually written updater section before proceeding. After restarting the correct idle Moonraker instance, use the clone's launcher for future visits.
+If Moonraker was configured for the old ZIP application directory, run the cloned launcher's `moonraker-setup` command against the same real `moonraker.conf`. It backs up affected configuration and places the Git updater directly in that main file, migrating a recognized old managed include when present. Review any conflicting manually written updater section before proceeding. After restarting the correct idle Moonraker instance, use the clone's launcher for future visits.
+
+For an existing Git installation with an old `kcm-updater.conf`, update the clone with the fast-forward command above, then rerun `moonraker-setup`. That migration backs up affected main/include files and the old managed file, then moves only the KCM updater section into `moonraker.conf`. It keeps the extra file, its includes and unrelated settings available and does not move saved profiles. Use this helper migration or the [manual migration procedure](moonraker.md#migrate-an-old-kcm-updaterconf), rather than adding a second copy of the updater.

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.1
+
+- Write the application updater directly in the selected `moonraker.conf` rather than creating an extra include file.
+- Move older KCM-managed updater sections into the main configuration after backup, preserving the existing extra file, its includes and unrelated settings.
+- Show the manual updater block in the README and keep setup safe to repeat.
+
 ## v0.4.0
 
 - Make Git clone plus the executable `kcm.sh` launcher the recommended installation flow; no package installation or virtual environment is needed to open the guide.

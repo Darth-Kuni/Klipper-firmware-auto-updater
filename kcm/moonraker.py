@@ -9,7 +9,6 @@ https://moonraker.readthedocs.io/en/latest/configuration/#git-repo-configuration
 """
 from __future__ import annotations
 
-import fnmatch
 import glob
 import json
 import os
@@ -32,7 +31,9 @@ APP_NAME = "klipper-component-manager.pyz"
 SECTION_NAME = "update_manager klipper-component-manager"
 SNIPPET_NAME = "kcm-updater.conf"
 MANAGED_MARKER = "# Managed by Klipper Component Manager: application updates only."
-_HEADER = re.compile(r"^\s*\[([^]\r\n]+)\]\s*(?:[#;].*)?$", re.MULTILINE)
+INLINE_BEGIN = "# BEGIN KCM APPLICATION UPDATER"
+INLINE_END = "# END KCM APPLICATION UPDATER"
+_HEADER = re.compile(r"^[ \t]*\[([^]\r\n]+)\][ \t]*(?:[#;][^\r\n]*)?\r?$", re.MULTILINE)
 
 
 def normalize_repository(repository: str) -> str:
@@ -165,6 +166,109 @@ def _write_atomic(path: Path, data: bytes, mode: int = 0o600) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def _sections(text: str) -> list[dict]:
+    offset = 1 if text.startswith("\ufeff") else 0
+    matches = list(_HEADER.finditer(text[offset:]))
+    sections = []
+    for number, match in enumerate(matches):
+        start, header_end = match.start() + offset, match.end() + offset
+        if text[header_end:header_end + 2] == "\r\n":
+            header_end += 2
+        elif text[header_end:header_end + 1] == "\n":
+            header_end += 1
+        end = matches[number + 1].start() + offset if number + 1 < len(matches) else len(text)
+        sections.append({"name": match[1].strip(), "start": start, "header_end": header_end, "end": end})
+    return sections
+
+
+def _option_values(text: str) -> dict[str, str]:
+    values = {}
+    for line in text.splitlines():
+        match = re.match(r"^[ \t]*([A-Za-z0-9_]+)[ \t]*[:=][ \t]*(.*)$", line)
+        if match:
+            values[match[1].lower()] = re.split(r"[ \t]+[#;]", match[2], maxsplit=1)[0].strip()
+    return values
+
+
+def _section_data_end(text: str, section: dict) -> int:
+    """Keep blank/comment lines before the next section outside replacements."""
+    cursor, end = section["start"], section["header_end"]
+    for line in text[section["start"]:section["end"]].splitlines(keepends=True):
+        cursor += len(line)
+        if line.strip() and not line.lstrip().startswith(("#", ";")):
+            end = cursor
+    return end
+
+
+def _remove_section_data(text: str, section: dict) -> str:
+    """Remove only a section's header/options; retain every comment/blank byte."""
+    retained = []
+    for line in text[section["header_end"]:section["end"]].splitlines(keepends=True):
+        if not line.strip() or line.lstrip().startswith(("#", ";")):
+            retained.append(line)
+    return text[:section["start"]] + "".join(retained) + text[section["end"]:]
+
+
+def _owned_prefix(text: str, section_start: int) -> int | None:
+    cursor = section_start
+    for line in reversed(text[:section_start].splitlines(keepends=True)):
+        cursor -= len(line)
+        value = line.strip().lstrip("\ufeff")
+        if value == MANAGED_MARKER:
+            return cursor + (1 if line.startswith("\ufeff") else 0)
+        if value and not value.startswith(("#", ";")):
+            break
+    return None
+
+
+def _inline_configuration(text: str, rendered: str) -> str:
+    sections = [section for section in _sections(text) if section["name"].lower() == SECTION_NAME]
+    if len(sections) > 1:
+        raise UpdateError("The main Moonraker configuration contains duplicate KCM updater sections; review them before setup.")
+    newline = "\r\n" if "\r\n" in text else "\n"
+    block = newline.join((INLINE_BEGIN, rendered.rstrip("\r\n").replace("\r\n", "\n").replace("\n", newline), INLINE_END, ""))
+    offset = 1 if text.startswith("\ufeff") else 0
+    marker = lambda value: list(re.finditer(r"^[ \t]*" + re.escape(value) + r"[ \t]*\r?$", text[offset:], re.MULTILINE))
+    begins, ends = marker(INLINE_BEGIN), marker(INLINE_END)
+    if begins or ends:
+        if len(begins) != 1 or len(ends) != 1 or not sections:
+            raise UpdateError("KCM's inline configuration markers are incomplete or ambiguous; review the main configuration.")
+        start, end = begins[0].start() + offset, ends[0].end() + offset
+        if text[end:end + 1] == "\n":
+            end += 1
+        if start >= end or not start <= sections[0]["start"] < end:
+            raise UpdateError("KCM's inline configuration markers do not surround its updater section.")
+        if any(section["name"].lower() != SECTION_NAME for section in _sections(text[start:end])):
+            raise UpdateError("KCM's marked inline block contains another section; unrelated settings will not be overwritten.")
+        if any(line.strip() and not line.lstrip().startswith(("#", ";"))
+               for line in text[start:sections[0]["start"]].splitlines()):
+            raise UpdateError("KCM's marked inline block contains settings before its updater section; review the marker boundaries before setup.")
+        if _section_data_end(text, sections[0]) > ends[0].start() + offset:
+            raise UpdateError("KCM updater settings extend past its inline end marker; review the marker boundaries before setup.")
+        return text[:start] + block + text[end:]
+    if not sections:
+        separator = newline if text.endswith(("\n", "\r")) else newline + newline
+        return text + separator + block
+    section = sections[0]
+    owned_start = _owned_prefix(text, section["start"])
+    if owned_start is None:
+        current = _option_values(text[section["header_end"]:section["end"]])
+        desired = _option_values(rendered)
+        try:
+            current_repo = (_origin_repository(current.get("origin", "")) if current.get("type") == "git_repo"
+                            else normalize_repository(current.get("repo", "")))
+            desired_repo = (_origin_repository(desired.get("origin", "")) if desired.get("type") == "git_repo"
+                            else normalize_repository(desired.get("repo", "")))
+            same = (current.get("type") == desired.get("type") and current_repo.lower() == desired_repo.lower()
+                    and current.get("path") and Path(current["path"]).expanduser().resolve() == Path(desired["path"]).expanduser().resolve())
+        except (ValueError, UpdateError):
+            same = False
+        if not same:
+            raise UpdateError("The existing manual KCM updater section has a different repository/path identity. Review it before setup can adopt it.")
+    start = owned_start if owned_start is not None else section["start"]
+    return text[:start] + block + text[_section_data_end(text, section):]
+
+
 class Installer:
     def __init__(self, store: Store, output=print):
         self.store, self.output = store, output
@@ -197,54 +301,80 @@ class Installer:
         return info
 
     def _configuration(self, main: Path, snippet: Path, snippet_data: bytes) -> dict:
+        if main == snippet:
+            raise UpdateError("Select the main Moonraker configuration rather than the legacy KCM settings file.")
+        if snippet.is_symlink():
+            raise UpdateError("The legacy KCM settings file must not be a symlink.")
         originals: dict[Path, bytes] = {}
+        references: dict[Path, tuple[Path, bool]] = {}
         headers: list[tuple[Path, str]] = []
-        include_patterns: list[str] = []
+        include_matches: dict[str, list[str]] = {}
+        dangling: dict[Path, list[tuple[int, int]]] = {}
         pending = [main]
         while pending:
-            path = pending.pop().resolve()
-            if path in originals or path == snippet:
+            selected = pending.pop().absolute()
+            path = selected.resolve()
+            references[selected] = (path, selected.is_symlink())
+            if path in originals:
                 continue
             if len(originals) >= 256:
                 raise UpdateError("Too many included Moonraker files; configure the updater manually.")
-            data = _read(path)
-            originals[path] = data
-            content = _text(data, path).lstrip("\ufeff")
-            for match in _HEADER.finditer(content):
-                header = match[1].strip()
+            originals[path] = _read(path)
+            content = _text(originals[path], path)
+            for section in _sections(content):
+                header = section["name"]
                 if header.lower().startswith("include "):
-                    pattern = header.split(maxsplit=1)[1].strip()
-                    target = Path(pattern).expanduser()
-                    absolute = os.path.normpath(str(target if target.is_absolute() else path.parent / target))
-                    include_patterns.append(absolute)
-                    pending.extend(Path(item) for item in glob.glob(absolute) if Path(item).is_file())
+                    target = Path(header.split(maxsplit=1)[1].strip()).expanduser()
+                    pattern = os.path.normpath(str(target if target.is_absolute() else path.parent / target))
+                    matches = sorted(item for item in glob.glob(pattern) if Path(item).is_file())
+                    include_matches[pattern] = matches
+                    if not glob.has_magic(pattern) and Path(pattern).resolve() == snippet and not snippet.exists():
+                        dangling.setdefault(path, []).append((section["start"], section["header_end"]))
+                    pending.extend(Path(item) for item in matches)
                 else:
                     headers.append((path, header.lower()))
-        conflicts = [str(path) for path, section in headers if section == SECTION_NAME]
-        if conflicts:
-            raise UpdateError("An existing KCM update-manager section is already configured in " + ", ".join(conflicts) + ". Review/migrate it before using the managed include.")
+        # The old settings file may be present even if it is no longer loaded.
+        # Keep it, and remove only a recognized updater section when necessary.
         old_snippet = None
         if snippet.exists():
-            if snippet.is_symlink() or not snippet.is_file():
-                raise UpdateError("The managed updater include must be a regular file.")
-            old_snippet = _read(snippet)
-            lines = _text(old_snippet, snippet).splitlines()
-            if not lines or lines[0] != MANAGED_MARKER:
-                raise UpdateError(f"Existing {snippet.name} is not a KCM-managed file; it will not be overwritten.")
-        main_data = originals[main]
-        newline = b"\r\n" if b"\r\n" in main_data else b"\n"
+            if not snippet.is_file():
+                raise UpdateError("The legacy KCM settings file must be a regular file.")
+            old_snippet = originals.setdefault(snippet, _read(snippet))
+            references[snippet] = (snippet.resolve(), False)
+        conflicts = [str(path) for path, section in headers if section == SECTION_NAME and path not in {main, snippet}]
+        if conflicts:
+            raise UpdateError("An existing KCM update-manager section is already configured in " + ", ".join(conflicts) + ". Move/review that section before configuring it directly in the main Moonraker file.")
+        updated = {}
+        migrated = False
+        if old_snippet is not None:
+            legacy = _text(old_snippet, snippet)
+            updater_sections = [section for section in _sections(legacy) if section["name"].lower() == SECTION_NAME]
+            if updater_sections:
+                first = next((line.strip().lstrip("\ufeff") for line in legacy.splitlines() if line.strip()), "")
+                if first != MANAGED_MARKER or len(updater_sections) != 1:
+                    raise UpdateError("The legacy settings file contains an unmanaged or ambiguous KCM updater section; it will not be removed automatically.")
+                updated[snippet] = _remove_section_data(legacy, updater_sections[0]).encode("utf-8")
+                migrated = True
+        for path, spans in dangling.items():
+            text = _text(originals[path], path)
+            for start, end in sorted(spans, reverse=True):
+                text = text[:start] + text[end:]
+            updated[path] = text.encode("utf-8")
+        text = _text(updated.get(main, originals[main]), main)
+        newline = "\r\n" if "\r\n" in text else "\n"
         additions = []
         if not any(section == "update_manager" for _, section in headers):
+            text += (newline if text.endswith(("\n", "\r")) else newline + newline) + "[update_manager]" + newline
             additions.append("[update_manager]")
-        if not any(fnmatch.fnmatchcase(str(snippet), pattern) for pattern in include_patterns):
-            additions.append(f"[include {snippet.name}]")
-        updated_main = main_data
-        if additions:
-            separator = newline if main_data.endswith((b"\n", b"\r")) else newline + newline
-            updated_main += separator + (newline + newline).join(part.encode() for part in additions) + newline
-        return {"originals": originals, "old_snippet": old_snippet,
-                "new_main": updated_main, "new_snippet": snippet_data, "additions": additions,
-                "changed": updated_main != main_data or old_snippet != snippet_data}
+        inline = _inline_configuration(text, _text(snippet_data, main))
+        updated[main] = inline.encode("utf-8")
+        updated = {path: data for path, data in updated.items() if data != originals[path]}
+        for selected, (resolved, symlink) in references.items():
+            if resolved in updated and symlink:
+                raise UpdateError(f"An included configuration that needs editing is a symlink: {selected}. Select/review its real file first.")
+        return {"originals": originals, "references": references, "include_matches": include_matches,
+                "updates": updated, "old_snippet": old_snippet, "new_main": updated.get(main, originals[main]),
+                "additions": additions, "legacy_migration": migrated, "changed": bool(updated)}
 
     def _plan(self, repository: str, app_dir: Path, moonraker_config: Path,
               *, require_installed: bool = False) -> dict:
@@ -278,6 +408,8 @@ class Installer:
         return {"repository": repository, "app_dir": str(app), "moonraker_config": str(main),
                 "snippet": str(snippet), "config": configuration, "release": release,
                 "changed": edits["changed"], "additions": edits["additions"], "_edits": edits,
+                "target": str(main), "modified_files": [str(path) for path in edits["updates"]],
+                "legacy_migration": edits["legacy_migration"],
                 "restart_required": edits["changed"]}
 
     def validate_target(self, repository: str, app_dir: Path, moonraker_config: Path,
@@ -341,6 +473,8 @@ class Installer:
         return {"repository": repository, "app_dir": str(app), "checkout": str(app), "mode": "git_repo",
                 "moonraker_config": str(main), "snippet": str(snippet), "config": configuration,
                 "changed": edits["changed"], "additions": edits["additions"], "_edits": edits,
+                "target": str(main), "modified_files": [str(path) for path in edits["updates"]],
+                "legacy_migration": edits["legacy_migration"],
                 "restart_required": edits["changed"]}
 
     def validate_git_target(self, repository: str, checkout: Path, moonraker_config: Path) -> dict:
@@ -361,9 +495,11 @@ class Installer:
             return {key: value for key, value in plan.items() if key != "_edits"}
         main, snippet = Path(plan["moonraker_config"]), Path(plan["snippet"])
         channel = "main-branch" if plan.get("mode") == "git_repo" else "stable"
+        migration = ("\nRemove only the old KCM updater section from " + str(snippet) +
+                     "; retain that file, its other settings, and its live includes.") if plan["legacy_migration"] else ""
         prompt = (f"Configure Moonraker {channel} application updates from {plan['repository']}\n"
-                  f"Application directory: {plan['app_dir']}\nManaged include: {snippet}\n"
-                  f"Append to {main}: {', '.join(plan['additions']) or 'no additions'}\n\n"
+                  f"Application directory: {plan['app_dir']}\nWrite the updater directly into: {main}"
+                  + migration + "\n\n"
                   + plan["config"] + "\nBack up affected configuration files and apply this configuration? No services will be restarted.")
         if not confirm(prompt):
             raise UpdateError("Moonraker setup cancelled before changing configuration.")
@@ -372,32 +508,60 @@ class Installer:
             if refreshed["config"] != plan["config"]:
                 raise UpdateError("The checkout identity changed while awaiting confirmation; review it and try again.")
         edits = plan["_edits"]
+        # Re-scan include globs as well as known files: a new matching file can
+        # introduce a conflicting updater while the confirmation is displayed.
+        refreshed = self._configuration(main, snippet, plan["config"].encode("utf-8"))
+        if (refreshed["include_matches"] != edits["include_matches"] or
+                refreshed["originals"] != edits["originals"] or refreshed["updates"] != edits["updates"]):
+            raise UpdateError("Moonraker configuration changed while awaiting confirmation; review the new configuration and try again.")
+        for selected, (resolved, symlink) in edits["references"].items():
+            if selected.resolve() != resolved or selected.is_symlink() != symlink:
+                raise UpdateError("An included configuration path changed while awaiting confirmation; review it and try again.")
         for path, original in edits["originals"].items():
             if _read(path) != original:
                 raise UpdateError("Moonraker configuration changed while awaiting confirmation; review the new configuration and try again.")
         old_snippet = _read(snippet) if snippet.exists() else None
         if old_snippet != edits["old_snippet"] or snippet.is_symlink() or main.is_symlink():
-            raise UpdateError("The managed updater include changed while awaiting confirmation; try again.")
+            raise UpdateError("The legacy KCM settings file changed while awaiting confirmation; try again.")
         backup = self.store.root / "backups" / "moonraker" / (time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8])
         backup.mkdir(parents=True, mode=0o700)
-        _write_atomic(backup / main.name, edits["originals"][main])
-        if old_snippet is not None:
-            _write_atomic(backup / snippet.name, old_snippet)
-        atomic_json(backup / "backup-info.json", {"repository": plan["repository"], "moonraker_config": str(main), "snippet": str(snippet), "created": time.time()})
-        main_mode = stat.S_IMODE(main.stat().st_mode)
-        snippet_mode = stat.S_IMODE(snippet.stat().st_mode) if snippet.exists() else main_mode
-        try:
-            _write_atomic(snippet, edits["new_snippet"], snippet_mode)
-            if edits["new_main"] != edits["originals"][main]:
-                _write_atomic(main, edits["new_main"], main_mode)
-        except BaseException:
-            if old_snippet is None:
-                snippet.unlink(missing_ok=True)
+        backup_paths = {main, *edits["updates"]}
+        records = {}
+        for number, path in enumerate(sorted(backup_paths)):
+            if path == main or path == snippet:
+                relative = Path(path.name)
+            elif path.is_relative_to(main.parent):
+                relative = Path("includes") / path.relative_to(main.parent)
             else:
-                _write_atomic(snippet, old_snippet, snippet_mode)
+                relative = Path("external-includes") / str(number) / path.name
+            destination = backup / relative
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _write_atomic(destination, edits["originals"][path])
+            records[str(path)] = relative.as_posix()
+        atomic_json(backup / "backup-info.json", {"repository": plan["repository"], "moonraker_config": str(main),
+                    "legacy_settings": str(snippet), "files": records, "created": time.time()})
+        modes = {path: stat.S_IMODE(path.stat().st_mode) for path in edits["updates"]}
+        applied = []
+        try:
+            # Write the selected main file last, after the old duplicate updater
+            # and any dangling legacy include references have been removed.
+            for path in sorted(edits["updates"], key=lambda path: (path == main, str(path))):
+                if path.is_symlink() or _read(path) != edits["originals"][path]:
+                    raise UpdateError("A configuration file changed during setup; review it and retry.")
+                _write_atomic(path, edits["updates"][path], modes[path])
+                applied.append(path)
+        except BaseException as original_error:
+            failures = []
+            for path in reversed(applied):
+                try:
+                    _write_atomic(path, edits["originals"][path], modes[path])
+                except BaseException:
+                    failures.append(str(path))
+            if failures:
+                raise UpdateError(f"Configuration changes failed and automatic restoration failed for {', '.join(failures)}. Restore the saved originals from {backup}.") from original_error
             raise
         result = {key: value for key, value in plan.items() if key != "_edits"}
         result["backup_dir"] = str(backup)
-        self.output(f"Moonraker updater configuration saved. Backups: {backup}")
+        self.output(f"Moonraker updater saved directly in {main}. Backups: {backup}")
         self.output("Restart the intended Moonraker instance when the printer is idle, then refresh its update manager. This entry updates the KCM application; firmware flashing remains an explicit KCM operation.")
         return result

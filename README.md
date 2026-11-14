@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Darth-Kuni/Klipper-firmware-auto-updater/actions/workflows/ci.yml/badge.svg)](https://github.com/Darth-Kuni/Klipper-firmware-auto-updater/actions/workflows/ci.yml)
 
-A standalone Linux terminal app that walks you through Klipper/Katapult setup, remembers each board's settings, and rebuilds and flashes your configured components together. Version 0.4.0 is an alpha for controlled testing.
+A standalone Linux terminal app that walks you through Klipper/Katapult setup, remembers each board's settings, and rebuilds and flashes your configured components together. Version 0.4.1 is an alpha for controlled testing.
 
 ## Install and launch
 
@@ -101,13 +101,29 @@ Omit `--latest` to build the current host commit. Review and reconfigure if upst
 
 ## Update this app through Moonraker
 
-Run this once from the clone:
+The updater section belongs directly in your existing `moonraker.conf`. Choose one setup method.
+
+**Manual:** back up that file, then paste this section into it once. Replace `YOUR_USER` with your Linux username, or use the full path of your actual clone. Keep the shared `[update_manager]` section once if it is already present; add it if missing.
+
+```ini
+[update_manager klipper-component-manager]
+type: git_repo
+channel: dev
+path: /home/YOUR_USER/Klipper-firmware-auto-updater
+origin: https://github.com/Darth-Kuni/Klipper-firmware-auto-updater.git
+primary_branch: main
+is_system_service: False
+```
+
+**Guided alternative:** run this and select the actual `moonraker.conf` when prompted:
 
 ```sh
 ~/Klipper-firmware-auto-updater/kcm.sh moonraker-setup
 ```
 
-Select the actual `moonraker.conf` when prompted and review the plan. KCM detects this checkout, backs up affected configuration and writes its updater include. Saved printer profiles and firmware jobs stay in their separate data directory.
+KCM detects this checkout, backs up affected configuration and writes the section directly into the selected `moonraker.conf` after confirmation. It adds the base update-manager section if needed. You do not need to paste the manual block when using the helper. Saved printer profiles and firmware jobs stay in their separate data directory.
+
+An older setup may use `kcm-updater.conf`. After updating the app, rerun the helper to back up the affected files and move only the KCM updater section into `moonraker.conf`. The existing extra file, its include directives and unrelated settings stay available. For a manual migration, move only that updater section so it is loaded once; see the [migration instructions](docs/moonraker.md#migrate-an-old-kcm-updaterconf).
 
 Exit KCM, wait for firmware work and printing to finish, and restart the intended Moonraker instance. A standard instance commonly uses `sudo systemctl restart moonraker`; use your actual service name for custom/multiple instances. Refresh updates in Mainsail/Fluidd, then update **klipper-component-manager** there. Continue launching the same `~/Klipper-firmware-auto-updater/kcm.sh` afterwards.
 
@@ -150,7 +166,7 @@ A failed host installation retains `install.json` and `install.log`. Inspect a p
 | Build settings changed | Review with the `configure ... --latest` launcher command above and rebuild; do not substitute MCU, clock, pin or offset defaults. |
 | Wrong service/source/MCU inventory | Correct the saved profiles to match the intended running instance. |
 | Existing services prevent new-host install | Preserve the working installation and skip that stage, or select separate service/source paths. |
-| Moonraker updater missing or invalid | Check the selected config/include, actual clone path, `main` branch and origin. Restart the correct idle instance and refresh updates; see [the detailed guide](docs/moonraker.md). |
+| Moonraker updater missing or invalid | Check the single updater section in the selected `moonraker.conf`, actual clone path, `main` branch and origin. Migrate an old managed include by rerunning setup. Restart the correct idle instance and refresh updates; see [the detailed guide](docs/moonraker.md). |
 
 ## Limits, development and removal
 
@@ -160,8 +176,8 @@ The app uses the Python standard library. USB/UART flashing also needs pyserial 
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for tests and packaging, [VALIDATION.md](VALIDATION.md) for verification and outstanding hardware work, and [optional installation methods](docs/installation.md) for single-file downloads or wheels.
 
-To remove the app, finish firmware work and exit it. Disable its Moonraker updater include if configured, ensuring no wildcard include still loads it, then restart the intended idle Moonraker instance. Keep a shared `[update_manager]` section used by other components. You can remove the application checkout after checking its path. Keep the separate data directory to retain your saved profiles; host services provisioned by the guide require separate inspection/removal.
+To remove the app, finish firmware work and exit it. Back up `moonraker.conf`, remove its `[update_manager klipper-component-manager]` section, then restart the intended idle Moonraker instance. For a legacy include setup, also ensure no old KCM updater section is still loaded. Keep a shared `[update_manager]` section used by other components. You can remove the application checkout after checking its path. Keep the separate data directory to retain your saved profiles; host services provisioned by the guide require separate inspection/removal.
 
 Official references: [Klipper installation](https://www.klipper3d.org/Installation.html), [configuration checks](https://www.klipper3d.org/Config_checks.html), [CAN setup](https://www.klipper3d.org/CANBUS.html), [Katapult](https://github.com/Arksine/katapult), and [Moonraker installation](https://moonraker.readthedocs.io/en/latest/installation/). Board sources are bundled in the catalog.
 
-Version 0.4.0 has not been tested on physical printers. Linux provisioning, initial bootloader writes and commissioning still need controlled hardware validation. See [LICENSE](LICENSE) for the license.
+Version 0.4.1 has not been tested on physical printers. Linux provisioning, initial bootloader writes and commissioning still need controlled hardware validation. See [LICENSE](LICENSE) for the license.

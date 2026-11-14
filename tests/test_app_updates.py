@@ -51,7 +51,9 @@ class ApplicationAdoptionTests(unittest.TestCase):
         self.assertEqual(info['version'], 'v' + __version__)
         self.assertEqual(info['asset_name'], ASSET_NAME)
         self.assertTrue(self.config.read_bytes().startswith(self.original))
-        self.assertIn(b'[include kcm-updater.conf]', self.config.read_bytes())
+        self.assertIn(b'[update_manager klipper-component-manager]', self.config.read_bytes())
+        self.assertNotIn(b'[include kcm-updater.conf]', self.config.read_bytes())
+        self.assertFalse((self.config.parent / 'kcm-updater.conf').exists())
         self.assertTrue(Path(result['backup_dir']).is_dir())
         self.assertEqual(self.sentinel.read_text(), '{"keep": true}')
 

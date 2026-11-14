@@ -8,7 +8,7 @@ from unittest.mock import patch
 import zipfile
 
 from kcm.engine import UpdateError
-from kcm.moonraker import (APP_NAME, ASSET_NAME, MANAGED_MARKER, SNIPPET_NAME,
+from kcm.moonraker import (APP_NAME, ASSET_NAME, INLINE_BEGIN, INLINE_END, MANAGED_MARKER, SNIPPET_NAME,
                            Installer, render_git_update_config, render_update_config)
 from kcm.storage import Store
 
@@ -83,9 +83,9 @@ class InstallerTests(unittest.TestCase):
         updated = self.config.read_bytes()
         self.assertTrue(updated.startswith(self.original))
         self.assertIn(b"[update_manager]\r\n", updated)
-        self.assertIn(f"[include {SNIPPET_NAME}]".encode(), updated)
-        snippet = self.config.parent / SNIPPET_NAME
-        self.assertEqual(snippet.read_text(), render_update_config(REPOSITORY, self.app))
+        self.assertNotIn(f"[include {SNIPPET_NAME}]".encode(), updated)
+        self.assertIn(render_update_config(REPOSITORY, self.app).replace('\n', '\r\n').encode(), updated)
+        self.assertFalse((self.config.parent / SNIPPET_NAME).exists())
         self.assertEqual((Path(result["backup_dir"]) / self.config.name).read_bytes(), self.original)
         self.assertTrue(result["restart_required"])
         self.assertFalse((self.store.root / "registry.json").exists())
@@ -159,28 +159,32 @@ class InstallerTests(unittest.TestCase):
         (self.config.parent / "services.conf").write_text("[update_manager]\nrefresh_interval: 24\n", encoding="utf-8")
         self.install()
         self.assertNotIn(b"[update_manager]\r\n", self.config.read_bytes())
-        self.assertIn(SNIPPET_NAME.encode(), self.config.read_bytes())
+        self.assertIn(b'[update_manager klipper-component-manager]', self.config.read_bytes())
+        self.assertFalse((self.config.parent / SNIPPET_NAME).exists())
 
     def test_existing_wildcard_include_does_not_receive_duplicate_direct_include(self):
         self.stage()
         self.config.write_bytes(self.original + b"\r\n[update_manager]\r\n[include *.conf]\r\n")
         self.install()
         self.assertNotIn(f"[include {SNIPPET_NAME}]".encode(), self.config.read_bytes())
-        self.assertTrue((self.config.parent / SNIPPET_NAME).exists())
+        self.assertFalse((self.config.parent / SNIPPET_NAME).exists())
 
-    def test_existing_relative_include_is_not_duplicated(self):
+    def test_dangling_legacy_relative_include_is_removed_for_inline_setup(self):
         self.stage()
         self.config.write_bytes(self.original + f"\r\n[update_manager]\r\n[include ./{SNIPPET_NAME}]\r\n".encode())
         self.install()
-        self.assertEqual(self.config.read_bytes().count(SNIPPET_NAME.encode()), 1)
+        self.assertNotIn(SNIPPET_NAME.encode(), self.config.read_bytes())
+        self.assertIn(b'[update_manager klipper-component-manager]', self.config.read_bytes())
 
-    def test_existing_unmanaged_snippet_is_never_overwritten(self):
+    def test_extra_file_with_unrelated_settings_is_preserved(self):
         self.stage()
         snippet = self.config.parent / SNIPPET_NAME
         snippet.write_text("# My own file\n[custom]\nx: y\n", encoding="utf-8")
-        with self.assertRaisesRegex(UpdateError, "not a KCM-managed file"):
-            self.install()
+        self.config.write_bytes(self.original + f'\r\n[include {SNIPPET_NAME}]\r\n'.encode())
+        self.install()
         self.assertEqual(snippet.read_text(), "# My own file\n[custom]\nx: y\n")
+        self.assertIn(b'[update_manager klipper-component-manager]', self.config.read_bytes())
+        self.assertIn(f'[include {SNIPPET_NAME}]'.encode(), self.config.read_bytes())
 
     def test_existing_kcm_section_in_another_include_is_not_silently_overridden(self):
         self.stage()
@@ -202,7 +206,7 @@ class InstallerTests(unittest.TestCase):
             self.install(confirm)
         self.assertFalse((self.config.parent / SNIPPET_NAME).exists())
 
-    def test_main_write_failure_restores_snippet_and_preserves_original_main(self):
+    def test_main_write_failure_preserves_original_main(self):
         self.stage()
         import kcm.moonraker as module
         original_writer = module._write_atomic
@@ -216,16 +220,180 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.config.parent / SNIPPET_NAME).exists())
         self.assertEqual(len(list((self.store.root / "backups/moonraker").iterdir())), 1)
 
-    def test_managed_snippet_update_keeps_backup_of_previous_version(self):
+    def test_managed_inline_update_keeps_backup_of_previous_configuration(self):
         self.stage()
         self.install()
-        snippet = self.config.parent / SNIPPET_NAME
-        changed = snippet.read_text().replace("channel: stable", "channel: beta")
-        snippet.write_text(changed, encoding="utf-8")
+        changed = self.config.read_bytes().replace(b"channel: stable", b"channel: beta")
+        self.config.write_bytes(changed)
         result = self.install()
-        self.assertIn("channel: stable", snippet.read_text())
-        self.assertEqual((Path(result["backup_dir"]) / SNIPPET_NAME).read_text(), changed)
-        self.assertTrue(snippet.read_text().startswith(MANAGED_MARKER))
+        self.assertIn(b"channel: stable", self.config.read_bytes())
+        self.assertEqual((Path(result["backup_dir"]) / self.config.name).read_bytes(), changed)
+        self.assertEqual(self.config.read_bytes().count(MANAGED_MARKER.encode()), 1)
+
+    def legacy(self, *, wildcard=False, extra=b''):
+        snippet = self.config.parent / SNIPPET_NAME
+        legacy = render_update_config(REPOSITORY, self.app).encode() + extra
+        snippet.write_bytes(legacy)
+        include = b'[include *.conf]' if wildcard else f'[include {SNIPPET_NAME}]'.encode()
+        original = self.original + b'\r\n[update_manager]\r\n' + include + b'\r\n'
+        self.config.write_bytes(original)
+        return snippet, legacy, original
+
+    def test_legacy_updater_moves_inline_and_preserves_extra_settings_and_include(self):
+        self.stage()
+        extra = b'\n# My webcam settings\n[webcam my_camera]\nlocation: frame\nsnapshot_url: http://camera/snapshot\n'
+        snippet, old_extra, old_main = self.legacy(extra=extra)
+        result = self.install()
+        self.assertTrue(snippet.exists())
+        self.assertIn(extra, snippet.read_bytes())
+        self.assertIn(MANAGED_MARKER.encode(), snippet.read_bytes())
+        self.assertNotIn(b'[update_manager klipper-component-manager]', snippet.read_bytes())
+        self.assertIn(f'[include {SNIPPET_NAME}]'.encode(), self.config.read_bytes())
+        self.assertEqual(self.config.read_bytes().count(b'[update_manager klipper-component-manager]'), 1)
+        backup = Path(result['backup_dir'])
+        self.assertEqual((backup / self.config.name).read_bytes(), old_main)
+        self.assertEqual((backup / SNIPPET_NAME).read_bytes(), old_extra)
+        after = snippet.read_bytes(), self.config.read_bytes()
+        self.assertFalse(self.install(lambda _: self.fail('Repeated migration must be a no-op'))['changed'])
+        self.assertEqual((snippet.read_bytes(), self.config.read_bytes()), after)
+
+    def test_legacy_wildcard_include_and_other_settings_remain_loaded(self):
+        self.stage()
+        extra = b'\n# Existing update preferences\n[update_manager]\nrefresh_interval: 24\n'
+        snippet, _, _ = self.legacy(wildcard=True, extra=extra)
+        self.install()
+        self.assertIn(extra, snippet.read_bytes())
+        self.assertIn(b'[include *.conf]', self.config.read_bytes())
+        self.assertNotIn(b'[update_manager klipper-component-manager]', snippet.read_bytes())
+        self.assertEqual(self.config.read_bytes().count(b'[update_manager]\r\n'), 1)
+
+    def test_nested_legacy_include_keeps_other_configuration_unchanged(self):
+        self.stage()
+        snippet, _, _ = self.legacy(extra=b'\n[custom]\nvalue: keep\n')
+        self.config.write_bytes(self.original + b'\r\n[include services.conf]\r\n')
+        included = self.config.parent / 'services.conf'
+        services = (b'# Other services\n[update_manager]\nrefresh_interval: 48\n\n'
+                    + f'[include ./{SNIPPET_NAME}]\n'.encode()
+                    + b'\n[update_manager other_app]\ntype: git_repo\npath: ~/another\n')
+        included.write_bytes(services)
+        self.install()
+        self.assertEqual(included.read_bytes(), services)
+        self.assertIn(b'[custom]\nvalue: keep\n', snippet.read_bytes())
+        self.assertNotIn(b'[update_manager klipper-component-manager]', snippet.read_bytes())
+        self.assertIn(b'[update_manager klipper-component-manager]', self.config.read_bytes())
+
+    def test_declining_legacy_migration_preserves_both_files(self):
+        self.stage()
+        snippet, old_extra, old_main = self.legacy(extra=b'\n[custom]\nvalue: keep\n')
+        with self.assertRaisesRegex(UpdateError, 'cancelled'):
+            self.install(lambda _: False)
+        self.assertEqual(snippet.read_bytes(), old_extra)
+        self.assertEqual(self.config.read_bytes(), old_main)
+        self.assertFalse((self.store.root / 'backups').exists())
+
+    def test_unmanaged_legacy_updater_requires_review(self):
+        self.stage()
+        snippet, old_extra, old_main = self.legacy()
+        unmanaged = old_extra.replace((MANAGED_MARKER + '\n').encode(), b'', 1)
+        snippet.write_bytes(unmanaged)
+        with self.assertRaises(UpdateError):
+            self.install()
+        self.assertEqual(snippet.read_bytes(), unmanaged)
+        self.assertEqual(self.config.read_bytes(), old_main)
+
+    def test_legacy_file_edit_during_confirmation_is_not_overwritten(self):
+        self.stage()
+        snippet, old_extra, old_main = self.legacy()
+        changed = old_extra + b'\n[custom]\nvalue: a concurrent edit\n'
+        def confirm(_):
+            snippet.write_bytes(changed)
+            return True
+        with self.assertRaisesRegex(UpdateError, 'changed while awaiting'):
+            self.install(confirm)
+        self.assertEqual(snippet.read_bytes(), changed)
+        self.assertEqual(self.config.read_bytes(), old_main)
+
+    def test_migration_write_failure_restores_all_affected_files(self):
+        self.stage()
+        snippet, old_extra, old_main = self.legacy(extra=b'\n[custom]\nvalue: keep\n')
+        import kcm.moonraker as module
+        writer = module._write_atomic
+        destinations = []
+        def fail_second_configuration_write(path, data, mode=0o600):
+            if path in {self.config, snippet}:
+                destinations.append(path)
+                if len(destinations) == 2:
+                    raise OSError('simulated migration failure')
+            return writer(path, data, mode)
+        with patch.object(module, '_write_atomic', side_effect=fail_second_configuration_write):
+            with self.assertRaisesRegex(OSError, 'simulated migration failure'):
+                self.install()
+        self.assertGreaterEqual(len(destinations), 2)
+        self.assertEqual(snippet.read_bytes(), old_extra)
+        self.assertEqual(self.config.read_bytes(), old_main)
+
+    def test_new_wildcard_conflict_during_confirmation_blocks_stale_plan(self):
+        self.stage()
+        original = self.original + b'\n[include extensions/*.conf]\n'
+        self.config.write_bytes(original)
+        directory = self.config.parent / 'extensions'
+        directory.mkdir()
+        def confirm(_):
+            (directory / 'new.conf').write_text('[update_manager klipper-component-manager]\ntype: git_repo\n', encoding='utf-8')
+            return True
+        with self.assertRaises(UpdateError):
+            self.install(confirm)
+        self.assertEqual(self.config.read_bytes(), original)
+
+    def test_utf8_bom_and_original_crlf_bytes_are_preserved(self):
+        self.stage()
+        original = b'\xef\xbb\xbf' + self.original
+        self.config.write_bytes(original)
+        self.install()
+        updated = self.config.read_bytes()
+        self.assertTrue(updated.startswith(original))
+        self.assertNotIn(b'\n', updated.replace(b'\r\n', b''))
+        self.assertFalse(self.install(lambda _: self.fail('BOM must not defeat idempotence'))['changed'])
+
+    def test_matching_manual_inline_section_is_adopted_without_duplicate(self):
+        self.stage()
+        manual = render_update_config(REPOSITORY, self.app).replace(MANAGED_MARKER + '\n', '', 1)
+        self.config.write_bytes(self.original + b'\r\n[update_manager]\r\n' + manual.encode())
+        self.install()
+        self.assertEqual(self.config.read_bytes().count(b'[update_manager klipper-component-manager]'), 1)
+        self.assertFalse((self.config.parent / SNIPPET_NAME).exists())
+
+    def test_manual_inline_section_pointing_to_another_app_is_not_overwritten(self):
+        self.stage()
+        manual = render_update_config(REPOSITORY, self.root / 'another-app').replace(MANAGED_MARKER + '\n', '', 1)
+        original = self.original + manual.encode()
+        self.config.write_bytes(original)
+        with self.assertRaises(UpdateError):
+            self.install()
+        self.assertEqual(self.config.read_bytes(), original)
+
+    def test_existing_main_block_and_legacy_copy_converge_to_one_updater(self):
+        self.stage()
+        snippet, _, original = self.legacy(extra=b'\n[custom]\nvalue: keep\n')
+        self.config.write_bytes(original + render_update_config(REPOSITORY, self.app).encode())
+        self.install()
+        self.assertEqual(self.config.read_bytes().count(b'[update_manager klipper-component-manager]'), 1)
+        self.assertNotIn(b'[update_manager klipper-component-manager]', snippet.read_bytes())
+        self.assertIn(b'[custom]\nvalue: keep\n', snippet.read_bytes())
+
+    def test_malformed_inline_boundaries_are_rejected_without_losing_user_options(self):
+        self.stage()
+        self.install()
+        valid = self.config.read_bytes()
+        begin = INLINE_BEGIN.encode()
+        end = INLINE_END.encode()
+        for changed in (valid.replace(begin, begin + b'\r\nmax_upload_size: 4096', 1),
+                        valid.replace(end, end + b'\r\nchannel: beta', 1)):
+            with self.subTest(changed=changed):
+                self.config.write_bytes(changed)
+                with self.assertRaises(UpdateError):
+                    self.install()
+                self.assertEqual(self.config.read_bytes(), changed)
 
 
 class GitInstallerTests(unittest.TestCase):
@@ -283,7 +451,8 @@ class GitInstallerTests(unittest.TestCase):
         commit = self.git("rev-parse", "HEAD")
         result = self.install()
         self.assertEqual((Path(result["backup_dir"]) / self.config.name).read_bytes(), self.original)
-        self.assertIn("type: git_repo", (self.config.parent / SNIPPET_NAME).read_text())
+        self.assertIn("type: git_repo", self.config.read_text())
+        self.assertFalse((self.config.parent / SNIPPET_NAME).exists())
         self.assertEqual(self.git("rev-parse", "HEAD"), commit)
         self.assertEqual(self.git("status", "--porcelain"), "")
         repeated = self.install(lambda _: self.fail("Identical configuration must not prompt"))
@@ -349,7 +518,10 @@ class GitInstallerTests(unittest.TestCase):
         self.assertEqual(snippet.read_text(), old)
         result = self.install()
         self.assertEqual((Path(result["backup_dir"]) / SNIPPET_NAME).read_text(), old)
-        self.assertIn("type: git_repo", snippet.read_text())
+        self.assertIn("type: git_repo", self.config.read_text())
+        self.assertTrue(snippet.exists())
+        self.assertNotIn('[update_manager klipper-component-manager]', snippet.read_text())
+        self.assertIn(f'[include {SNIPPET_NAME}]', self.config.read_text())
 
 
 if __name__ == "__main__":

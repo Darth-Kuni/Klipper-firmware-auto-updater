@@ -92,11 +92,14 @@ def setup_updates(store: Store, app_dir: Path, moonraker_config: Path,
             # Existing valid installations are preserved; Moonraker handles
             # their subsequent release updates.
             installer.validate_target(repository, destination, moonraker_config, require_installed=True)
+        migration = ("The old KCM updater section will move into the main configuration; its extra file and other settings stay in place.\n"
+                     if plan.get('legacy_migration') else '')
         prompt = (f"Set up Moonraker updates for the standalone application from {repository}?\n"
                   f"Application: {destination / APP_NAME}\n"
                   f"Saved profiles and backups: {store.root}\n"
                   f"Moonraker configuration: {plan['moonraker_config']}\n"
-                  f"Managed include: {plan['snippet']}\n\n{plan['config']}\n"
+                  f"Updater section will be written directly in: {plan['moonraker_config']}\n\n{plan['config']}\n"
+                  + migration +
                   "The configuration files will be backed up. No printer firmware is flashed and no services are restarted.")
         if not confirm(prompt):
             raise UpdateError('Moonraker application setup cancelled before changes.')
